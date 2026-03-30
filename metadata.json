@@ -1,0 +1,7 @@
+{
+  "name": "AnbarAİ",
+  "description": "Professional Stock Management and B2B/B2C E-commerce platform for the Azerbaijan market with AI-powered OCR and analytics.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

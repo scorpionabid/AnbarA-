@@ -1,0 +1,198 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user with specific roles and permissions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "store_admin", "warehouse_manager", "sales_agent", "customer"] },
+        "storeId": { "type": "string", "description": "ID of the store this user belongs to" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Store": {
+      "title": "Store",
+      "description": "A business entity/market.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "adminUids": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name"]
+    },
+    "Branch": {
+      "title": "Branch",
+      "description": "A physical branch of a store.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "location": { "type": "string" }
+      },
+      "required": ["storeId", "name"]
+    },
+    "Warehouse": {
+      "title": "Warehouse",
+      "description": "A storage facility for a store or branch.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "branchId": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["storeId", "name"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory item.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "year": { "type": "integer" },
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "price": { "type": "number", "description": "Selling price" },
+        "purchasePrice": { "type": "number", "description": "Cost price" },
+        "stock": { "type": "integer" },
+        "minStock": { "type": "integer", "description": "Alert threshold for low stock" },
+        "unit": { "type": "string", "enum": ["ədəd", "kq", "litr", "metr", "paçka", "qutu"] },
+        "barcode": { "type": "string" },
+        "brand": { "type": "string" },
+        "expiryDate": { "type": "string", "format": "date" },
+        "location": { "type": "string", "description": "Shelf or section in warehouse" },
+        "warehouseId": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string", "description": "Product image URL or base64" }
+      },
+      "required": ["storeId", "year", "name", "sku", "price", "stock"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "name"]
+    },
+    "InventoryLog": {
+      "title": "Inventory Log",
+      "description": "Record of stock changes.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "type": { "type": "string", "enum": ["create", "update", "delete", "transfer"] },
+        "change": { "type": "integer" },
+        "oldStock": { "type": "integer" },
+        "newStock": { "type": "integer" },
+        "userEmail": { "type": "string" },
+        "storeId": { "type": "string" },
+        "year": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "type", "change", "timestamp"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "AI-processed invoice (Qaimə).",
+      "type": "object",
+      "properties": {
+        "imageUrl": { "type": "string", "format": "uri" },
+        "processedData": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "processed", "failed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["imageUrl", "status", "createdAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order.",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "totalPrice": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered", "cancelled"] },
+        "deliveryAddress": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "items", "totalPrice", "status", "createdAt"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Client or Supplier information.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "type": { "type": "string", "enum": ["client", "supplier"] },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "taxId": { "type": "string", "description": "VÖEN" },
+        "debt": { "type": "number", "description": "Outstanding debt for clients" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "type", "name"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "A completed sale transaction.",
+      "type": "object",
+      "properties": {
+        "sellerId": { "type": "string" },
+        "marketId": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "price": { "type": "number" }, "purchasePrice": { "type": "number" }, "quantity": { "type": "integer" } } } },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "card", "credit"] },
+        "paymentStatus": { "type": "string", "enum": ["paid", "unpaid"] },
+        "channel": { "type": "string", "enum": ["online", "offline"], "description": "Sales channel" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sellerId", "marketId", "items", "totalAmount", "paymentMethod", "createdAt"]
+    },
+    "DebtPayment": {
+      "title": "Debt Payment",
+      "description": "A payment made by a client to reduce their debt.",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "amount": { "type": "number" },
+        "note": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "storeId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "clientName", "amount", "recordedBy", "storeId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "User", "description": "User profiles" },
+    "/stores/{storeId}": { "schema": "Store", "description": "Markets/Stores" },
+    "/branches/{branchId}": { "schema": "Branch", "description": "Store branches" },
+    "/warehouses/{warehouseId}": { "schema": "Warehouse", "description": "Store warehouses" },
+    "/products/{productId}": { "schema": "Product", "description": "Product inventory" },
+    "/categories/{categoryId}": { "schema": "Category", "description": "Product categories" },
+    "/inventory_logs/{logId}": { "schema": "InventoryLog", "description": "Stock change history" },
+    "/invoices/{invoiceId}": { "schema": "Invoice", "description": "Processed invoices" },
+    "/orders/{orderId}": { "schema": "Order", "description": "Customer orders" },
+    "/contacts/{contactId}": { "schema": "Contact", "description": "Clients and Suppliers" },
+    "/sales/{saleId}": { "schema": "Sale", "description": "Sales transactions" },
+    "/debt_payments/{paymentId}": { "schema": "DebtPayment", "description": "Debt payment history" }
+  }
+}

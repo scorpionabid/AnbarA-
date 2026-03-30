@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        getUserData().role == 'super_admin' ||
+        (request.auth.token.email == "scorpionabid82@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isStoreAdmin(storeId) {
+      return isAuthenticated() && (getUserData().role == 'store_admin' && getUserData().storeId == storeId) || isAdmin();
+    }
+
+    function isStoreStaff(storeId) {
+      return isAuthenticated() && (getUserData().storeId == storeId || isAdmin());
+    }
+
+    function isWarehouseManager() {
+      return hasRole('warehouse_manager') || isAdmin();
+    }
+
+    function isSalesAgent() {
+      return hasRole('sales_agent') || isAdmin();
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['super_admin', 'store_admin', 'warehouse_manager', 'sales_agent', 'customer'];
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'sku', 'price', 'stock', 'storeId', 'year']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.sku is string && data.sku.size() > 0 &&
+             data.price is number && data.price >= 0 &&
+             data.stock is int && data.stock >= 0 &&
+             data.storeId is string &&
+             data.year is int &&
+             (!('purchasePrice' in data) || data.purchasePrice is number) &&
+             (!('minStock' in data) || data.minStock is int) &&
+             (!('unit' in data) || data.unit is string) &&
+             (!('barcode' in data) || data.barcode is string) &&
+             (!('brand' in data) || data.brand is string) &&
+             (!('expiryDate' in data) || data.expiryDate is string) &&
+             (!('location' in data) || data.location is string);
+    }
+
+    function isValidContact(data) {
+      return data.keys().hasAll(['name', 'type', 'storeId']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['client', 'supplier'] &&
+             data.storeId is string &&
+             (!('debt' in data) || data.debt is number);
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['sellerId', 'marketId', 'items', 'totalAmount', 'paymentMethod', 'createdAt']) &&
+             data.sellerId is string &&
+             data.marketId is string &&
+             data.items is list &&
+             data.totalAmount is number &&
+             data.paymentMethod in ['cash', 'card', 'credit'] &&
+             (!('channel' in data) || data.channel in ['online', 'offline']) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidDebtPayment(data) {
+      return data.keys().hasAll(['clientId', 'clientName', 'amount', 'recordedBy', 'storeId', 'createdAt']) &&
+             data.clientId is string &&
+             data.clientName is string &&
+             data.amount is number && data.amount > 0 &&
+             data.recordedBy is string &&
+             data.storeId is string &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin() || (isAuthenticated() && getUserData().role == 'store_admin' && get(/databases/$(database)/documents/users/$(uid)).data.storeId == getUserData().storeId);
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(uid) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || (isOwner(uid) && request.resource.data.role == resource.data.role) || (getUserData().role == 'store_admin' && request.resource.data.storeId == getUserData().storeId));
+    }
+
+    match /stores/{storeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /branches/{branchId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow write: if isStoreAdmin(request.resource.data.storeId);
+    }
+
+    match /warehouses/{warehouseId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow write: if isStoreAdmin(request.resource.data.storeId);
+    }
+
+    match /products/{productId} {
+      allow read: if isAuthenticated(); // Allow reading product names across stores
+      allow write: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'warehouse_manager'] || isAdmin());
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow write: if isStoreAdmin(request.resource.data.storeId);
+    }
+
+    match /inventory_logs/{logId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'warehouse_manager'] || isAdmin());
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isWarehouseManager();
+      allow create: if isWarehouseManager();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isOwner(resource.data.customerId) || isSalesAgent() || isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.customerId == request.auth.uid;
+      allow update: if isSalesAgent() || isAdmin();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isStoreStaff(resource.data.marketId);
+      allow create: if isStoreStaff(request.resource.data.marketId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidSale(request.resource.data);
+    }
+
+    match /debt_payments/{paymentId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidDebtPayment(request.resource.data);
+    }
+
+    match /contacts/{contactId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow write: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidContact(request.resource.data);
+    }
+
+    match /config/{configId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
