@@ -9,30 +9,36 @@ service cloud.firestore {
     }
 
     function isOwner(userId) {
+      return isAuthenticated() && request.auth.token.email == userId;
+    }
+    
+    function isUIDOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
     function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let emailDocPath = /databases/$(database)/documents/users/$(request.auth.token.email);
+      let uidDocPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(emailDocPath) ? get(emailDocPath).data : (exists(uidDocPath) ? get(uidDocPath).data : null);
     }
 
     function hasRole(role) {
-      return isAuthenticated() && getUserData().role == role;
+      return isAuthenticated() && getUserData() != null && getUserData().get('role', null) == role;
     }
 
     function isAdmin() {
       return isAuthenticated() && (
-        getUserData().role == 'super_admin' ||
-        (request.auth.token.email == "scorpionabid82@gmail.com" && request.auth.token.email_verified == true)
+        (request.auth.token.email == "scorpionabid82@gmail.com") ||
+        (getUserData() != null && getUserData().get('role', null) == 'super_admin')
       );
     }
 
     function isStoreAdmin(storeId) {
-      return isAuthenticated() && (getUserData().role == 'store_admin' && getUserData().storeId == storeId) || isAdmin();
+      return isAdmin() || (isAuthenticated() && getUserData() != null && getUserData().get('role', null) == 'store_admin' && getUserData().get('storeId', null) == storeId);
     }
 
     function isStoreStaff(storeId) {
-      return isAuthenticated() && (getUserData().storeId == storeId || isAdmin());
+      return isAdmin() || (isAuthenticated() && getUserData() != null && getUserData().get('storeId', null) == storeId);
     }
 
     function isWarehouseManager() {
@@ -50,7 +56,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
              data.uid is string &&
              data.email is string &&
-             data.role in ['super_admin', 'store_admin', 'warehouse_manager', 'sales_agent', 'customer'];
+             data.role in ['super_admin', 'store_admin', 'warehouse_manager', 'sales_agent'];
     }
 
     function isValidProduct(data) {
@@ -86,6 +92,20 @@ service cloud.firestore {
              data.totalAmount is number &&
              data.paymentMethod in ['cash', 'card', 'credit'] &&
              (!('channel' in data) || data.channel in ['online', 'offline']) &&
+             (!('clientId' in data) || data.clientId == null || data.clientId is string) &&
+             (!('clientName' in data) || data.clientName == null || data.clientName is string) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidPurchase(data) {
+      return data.keys().hasAll(['buyerId', 'storeId', 'items', 'totalAmount', 'paymentMethod', 'createdAt']) &&
+             data.buyerId is string &&
+             data.storeId is string &&
+             data.items is list &&
+             data.totalAmount is number &&
+             data.paymentMethod in ['cash', 'card', 'credit'] &&
+             (!('supplierId' in data) || data.supplierId == null || data.supplierId is string) &&
+             (!('supplierName' in data) || data.supplierName == null || data.supplierName is string) &&
              data.createdAt is timestamp;
     }
 
@@ -99,14 +119,96 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidExpense(data) {
+      return data.keys().hasAll(['storeId', 'amount', 'category', 'recordedBy', 'date']) &&
+             data.storeId is string &&
+             data.amount is number && data.amount > 0 &&
+             data.category is string &&
+             data.recordedBy is string &&
+             data.date is timestamp &&
+             (!('note' in data) || data.note is string);
+    }
+
+    function isValidReturn(data) {
+      return data.keys().hasAll(['storeId', 'type', 'items', 'totalRefund', 'recordedBy', 'date']) &&
+             data.storeId is string &&
+             data.type in ['customer_return', 'supplier_return'] &&
+             data.items is list &&
+             data.totalRefund is number && data.totalRefund >= 0 &&
+             data.recordedBy is string &&
+             data.date is timestamp &&
+             (!('reason' in data) || data.reason is string) &&
+             (!('originalTransactionId' in data) || data.originalTransactionId is string);
+    }
+
+    function isValidCashbox(data) {
+      return data.keys().hasAll(['storeId', 'name', 'type', 'balance', 'createdAt']) &&
+             data.storeId is string &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['cash', 'card', 'bank'] &&
+             data.balance is number &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidCashboxTransaction(data) {
+      return data.keys().hasAll(['cashboxId', 'storeId', 'type', 'amount', 'date', 'recordedBy']) &&
+             data.cashboxId is string &&
+             data.storeId is string &&
+             data.type in ['income', 'expense', 'transfer'] &&
+             data.amount is number && data.amount > 0 &&
+             data.date is timestamp &&
+             data.recordedBy is string &&
+             (!('description' in data) || data.description is string);
+    }
+
+    function isValidSupplierPayment(data) {
+      return data.keys().hasAll(['supplierId', 'supplierName', 'amount', 'recordedBy', 'storeId', 'createdAt']) &&
+             data.supplierId is string &&
+             data.supplierName is string &&
+             data.amount is number && data.amount > 0 &&
+             data.recordedBy is string &&
+             data.storeId is string &&
+             data.createdAt is timestamp &&
+             (!('note' in data) || data.note is string);
+    }
+
+    function isValidWriteOff(data) {
+      return data.keys().hasAll(['storeId', 'items', 'totalLoss', 'reason', 'recordedBy', 'date']) &&
+             data.storeId is string &&
+             data.items is list &&
+             data.totalLoss is number && data.totalLoss >= 0 &&
+             data.reason is string &&
+             data.recordedBy is string &&
+             data.date is timestamp;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
 
     match /users/{uid} {
-      allow read: if isOwner(uid) || isAdmin() || (isAuthenticated() && getUserData().role == 'store_admin' && get(/databases/$(database)/documents/users/$(uid)).data.storeId == getUserData().storeId);
-      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(uid) || isAdmin());
-      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || (isOwner(uid) && request.resource.data.role == resource.data.role) || (getUserData().role == 'store_admin' && request.resource.data.storeId == getUserData().storeId));
+      allow get: if isAuthenticated();
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.storeId == getUserData().storeId);
+      allow create: if isAuthenticated() && (
+        isAdmin() || 
+        (hasRole('store_admin') && 
+         request.resource.data.get('storeId', '') == getUserData().get('storeId', 'none') &&
+         request.resource.data.get('role', '') in ['sales_agent', 'warehouse_manager', 'store_admin']
+        ) || 
+        (isOwner(uid)) 
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (hasRole('store_admin') && 
+         resource.data.get('storeId', '') == getUserData().get('storeId', 'X') && 
+         request.resource.data.get('storeId', '') == getUserData().get('storeId', 'X') &&
+         request.resource.data.get('role', '') in ['sales_agent', 'warehouse_manager', 'store_admin']
+        ) ||
+        (isOwner(uid) && 
+         request.resource.data.get('role', '') == resource.data.get('role', '') &&
+         request.resource.data.get('storeId', '') == resource.data.get('storeId', ''))
+      );
+      allow delete: if isAdmin() || isUIDOwner(uid);
     }
 
     match /stores/{storeId} {
@@ -125,18 +227,26 @@ service cloud.firestore {
     }
 
     match /products/{productId} {
-      allow read: if isAuthenticated(); // Allow reading product names across stores
-      allow write: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'warehouse_manager'] || isAdmin());
+      allow get: if isStoreStaff(resource.data.storeId) || isAdmin();
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.storeId == getUserData().storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']) && isValidProduct(request.resource.data);
+      allow update: if isStoreStaff(resource.data.storeId) && (
+        isAdmin() || 
+        getUserData().get('role', null) in ['store_admin', 'warehouse_manager'] ||
+        (getUserData().get('role', null) == 'sales_agent' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']))
+      ) && isValidProduct(request.resource.data);
+      allow delete: if isStoreStaff(resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']);
     }
 
     match /categories/{categoryId} {
-      allow read: if isAuthenticated();
+      allow get: if isStoreStaff(resource.data.storeId) || isAdmin();
+      allow list: if isAdmin() || (isAuthenticated() && resource.data.storeId == getUserData().storeId);
       allow write: if isStoreAdmin(request.resource.data.storeId);
     }
 
     match /inventory_logs/{logId} {
       allow read: if isStoreStaff(resource.data.storeId);
-      allow create: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'warehouse_manager'] || isAdmin());
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']);
     }
 
     match /invoices/{invoiceId} {
@@ -152,21 +262,86 @@ service cloud.firestore {
 
     match /sales/{saleId} {
       allow read: if isStoreStaff(resource.data.marketId);
-      allow create: if isStoreStaff(request.resource.data.marketId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidSale(request.resource.data);
+      allow create: if isStoreStaff(request.resource.data.marketId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'sales_agent']) && isValidSale(request.resource.data);
+      allow update: if isStoreStaff(resource.data.marketId) && (isAdmin() || getUserData().get('role', null) == 'store_admin');
+    }
+
+    match /purchases/{purchaseId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']) && isValidPurchase(request.resource.data);
+      allow update: if isStoreStaff(resource.data.storeId) && (isAdmin() || getUserData().get('role', null) == 'store_admin');
+    }
+
+    match /transaction_edit_logs/{logId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId);
     }
 
     match /debt_payments/{paymentId} {
       allow read: if isStoreStaff(resource.data.storeId);
-      allow create: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidDebtPayment(request.resource.data);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'sales_agent']) && isValidDebtPayment(request.resource.data);
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin']) && isValidExpense(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /returns/{returnId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'sales_agent', 'warehouse_manager']) && isValidReturn(request.resource.data);
+    }
+
+    match /cashboxes/{cashboxId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreAdmin(request.resource.data.storeId) && isValidCashbox(request.resource.data);
+      allow update: if isStoreStaff(resource.data.storeId);
+      allow delete: if isAdmin();
+    }
+
+    match /cashbox_transactions/{transactionId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && isValidCashboxTransaction(request.resource.data);
+    }
+
+    match /supplier_payments/{paymentId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']) && isValidSupplierPayment(request.resource.data);
+    }
+
+    match /write_offs/{writeOffId} {
+      allow read: if isStoreStaff(resource.data.storeId);
+      allow create: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'warehouse_manager']) && isValidWriteOff(request.resource.data);
     }
 
     match /contacts/{contactId} {
-      allow read: if isStoreStaff(resource.data.storeId);
-      allow write: if isStoreStaff(request.resource.data.storeId) && (getUserData().role in ['store_admin', 'sales_agent'] || isAdmin()) && isValidContact(request.resource.data);
+      allow read: if isStoreStaff(resource.data.storeId) || isAdmin();
+      allow write: if isStoreStaff(request.resource.data.storeId) && (isAdmin() || getUserData().get('role', null) in ['store_admin', 'sales_agent', 'warehouse_manager']) && isValidContact(request.resource.data);
+    }
+
+    match /sale_drafts/{draftId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isOwner(request.resource.data.userId);
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    match /purchase_drafts/{draftId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isOwner(request.resource.data.userId);
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
     }
 
     match /config/{configId} {
-      allow read, write: if isAdmin();
+      allow read: if isAdmin() || hasRole('store_admin');
+      allow write: if isAdmin();
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
     }
   }
 }

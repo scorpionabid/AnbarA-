@@ -59,6 +59,7 @@ export async function seedDatabase(storeId: string, userId: string) {
         description: p.description,
         imageUrl: p.thumbnail,
         storeId,
+        year: new Date().getFullYear(),
         createdAt: serverTimestamp()
       });
 
@@ -153,9 +154,9 @@ export async function seedDatabase(storeId: string, userId: string) {
         channel: Math.random() > 0.7 ? "online" : "offline",
         clientId: randomClient.id,
         clientName: randomClient.name,
-        userId,
+        sellerId: userId,
         userEmail: "system@api.com",
-        storeId,
+        marketId: storeId,
         createdAt: date
       });
     }
@@ -168,12 +169,12 @@ export async function seedDatabase(storeId: string, userId: string) {
         date.setDate(date.getDate() - Math.floor(Math.random() * 15));
         
         batch.set(paymentRef, {
-          contactId: client.id,
-          contactName: client.name,
-          amount: Math.floor(client.debt * 0.3), // Paid 30% of debt
+          clientId: client.id,
+          clientName: client.name,
+          amount: Math.floor(client.debt * 0.3) || 1, // Paid 30% of debt
           type: "payment_in",
           note: "Demo ödəniş",
-          userId,
+          recordedBy: userId,
           userEmail: "system@api.com",
           storeId,
           createdAt: date

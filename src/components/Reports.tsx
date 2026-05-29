@@ -39,6 +39,7 @@ import { StatsGrid } from "./reports/StatsGrid";
 import { RevenueChart } from "./reports/RevenueChart";
 import { CategoryChart } from "./reports/CategoryChart";
 import { TopProductsTable } from "./reports/TopProductsTable";
+import { RecentSalesTable } from "./reports/RecentSalesTable";
 
 interface Sale {
   id: string;
@@ -58,6 +59,16 @@ export function Reports({ user }: { user: any }) {
       setLoading(true);
       try {
         let q = query(collection(db, "sales"), orderBy("createdAt", "desc"));
+        
+        if (timeRange !== "all") {
+          const days = timeRange === "7d" ? 7 : 30;
+          const date = new Date();
+          date.setDate(date.getDate() - days);
+          q = query(q, where("createdAt", ">=", date));
+        }
+        
+        q = query(q, limit(1000));
+        
         const snap = await getDocs(q);
         setSales(snap.docs.map(d => ({ id: d.id, ...d.data() } as Sale)));
       } catch (error) {
@@ -67,7 +78,7 @@ export function Reports({ user }: { user: any }) {
       }
     };
     fetchSales();
-  }, []);
+  }, [timeRange]);
 
   const stats = useMemo(() => {
     const totalRevenue = sales.reduce((acc, sale) => acc + sale.totalAmount, 0);
@@ -165,8 +176,11 @@ export function Reports({ user }: { user: any }) {
         <CategoryChart data={categoryData} colors={COLORS} />
       </div>
 
-      {/* Bottom Section: Top Products */}
-      <TopProductsTable sales={sales} />
+      {/* Bottom Section: Top Products & Recent Sales */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <TopProductsTable sales={sales} />
+        <RecentSalesTable sales={sales} />
+      </div>
     </div>
   );
 }

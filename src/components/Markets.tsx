@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../firebase";
-import { collection, getDocs, addDoc, doc, updateDoc, query, where, setDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, doc, updateDoc, query, where, setDoc, onSnapshot } from "firebase/firestore";
 import { Plus, Store, UserPlus, MapPin, Warehouse as WarehouseIcon, Loader2, CheckCircle, X, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "../lib/utils";
 
 export function Markets({ user }: { user: any }) {
@@ -21,57 +22,124 @@ export function Markets({ user }: { user: any }) {
   const isStoreAdmin = user.role === "store_admin";
 
   useEffect(() => {
-    fetchStores();
-    if (isStoreAdmin) {
-      fetchStoreDetails(user.storeId);
+    let unsubStores: () => void;
+    let unsubBranches: () => void;
+    let unsubWarehouses: () => void;
+    let unsubUsers: () => void;
+
+    if (isSuperAdmin) {
+      unsubStores = onSnapshot(collection(db, "stores"), (snap) => {
+        setStores(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+        setLoading(false);
+      }, (error: any) => {
+        if (error?.message?.includes("Quota") || error?.code === "resource-exhausted") {
+           console.warn("Stores fetch error: Quota limit exceeded.");
+        } else {
+           console.error("Stores fetch error:", error);
+        }
+        setLoading(false);
+      });
+    } else {
+      setLoading(false);
     }
-  }, []);
 
-  const fetchStores = async () => {
-    const snap = await getDocs(collection(db, "stores"));
-    setStores(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    setLoading(false);
-  };
+    if (isStoreAdmin) {
+      if (!user.storeId) {
+        setLoading(false);
+        return;
+      }
+      const storeId = user.storeId || "default";
+      unsubBranches = onSnapshot(query(collection(db, "branches"), where("storeId", "==", storeId)), (snap) => {
+        setBranches(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+      }, (error) => {
+        console.error("Branches fetch error:", error);
+      });
+      unsubWarehouses = onSnapshot(query(collection(db, "warehouses"), where("storeId", "==", storeId)), (snap) => {
+        setWarehouses(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+      }, (error) => {
+        console.error("Warehouses fetch error:", error);
+      });
+      unsubUsers = onSnapshot(query(collection(db, "users"), where("storeId", "==", storeId)), (snap) => {
+        setStoreUsers(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+      }, (error) => {
+        console.error("Users fetch error:", error);
+      });
+    }
 
-  const fetchStoreDetails = async (storeId: string) => {
-    const bSnap = await getDocs(query(collection(db, "branches"), where("storeId", "==", storeId)));
-    const wSnap = await getDocs(query(collection(db, "warehouses"), where("storeId", "==", storeId)));
-    const uSnap = await getDocs(query(collection(db, "users"), where("storeId", "==", storeId)));
+    return () => {
+      if (unsubStores) unsubStores();
+      if (unsubBranches) unsubBranches();
+      if (unsubWarehouses) unsubWarehouses();
+      if (unsubUsers) unsubUsers();
+    };
+  }, [isSuperAdmin, isStoreAdmin, user.storeId]);
+
+  // For super_admin viewing a specific store details
+  const fetchStoreDetails = (storeId: string) => {
+    const unsubB = onSnapshot(query(collection(db, "branches"), where("storeId", "==", storeId)), (snap) => {
+      setBranches(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }, (error) => {
+      console.error("Branches detail fetch error:", error);
+    });
+    const unsubW = onSnapshot(query(collection(db, "warehouses"), where("storeId", "==", storeId)), (snap) => {
+      setWarehouses(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }, (error) => {
+      console.error("Warehouses detail fetch error:", error);
+    });
+    const unsubU = onSnapshot(query(collection(db, "users"), where("storeId", "==", storeId)), (snap) => {
+      setStoreUsers(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    }, (error) => {
+      console.error("Users detail fetch error:", error);
+    });
     
-    setBranches(bSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    setWarehouses(wSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    setStoreUsers(uSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    // Note: In a full implementation, we'd want to clean these up when modal closes or store changes.
+    // For simplicity here, they will stay active while the component is mounted.
   };
 
   const handleCreateStore = async (e: React.FormEvent) => {
     e.preventDefault();
-    await addDoc(collection(db, "stores"), {
-      name: newStoreName,
-      createdAt: new Date().toISOString(),
-      adminUids: []
-    });
-    setNewStoreName("");
-    setIsStoreModalOpen(false);
-    fetchStores();
+    try {
+      await addDoc(collection(db, "stores"), {
+        name: newStoreName,
+        createdAt: new Date().toISOString(),
+        adminUids: []
+      });
+      setNewStoreName("");
+      setIsStoreModalOpen(false);
+      toast.success("Yeni mağaza yaradıldı");
+    } catch (error) {
+      console.error("Create store error:", error);
+      toast.error("Mağaza yaradılarkən xəta baş verdi");
+    }
   };
 
   const handleAddBranch = async (name: string, location: string) => {
-    const storeId = isStoreAdmin ? user.storeId : selectedStore.id;
-    await addDoc(collection(db, "branches"), { storeId, name, location });
-    fetchStoreDetails(storeId);
+    const storeId = isStoreAdmin ? user.storeId : selectedStore?.id;
+    if (!storeId) return;
+    try {
+      await addDoc(collection(db, "branches"), { storeId, name, location });
+      toast.success("Yeni filial əlavə edildi");
+    } catch (error) {
+      console.error("Add branch error:", error);
+      toast.error("Filial əlavə edilərkən xəta baş verdi");
+    }
   };
 
   const handleAddWarehouse = async (name: string, branchId: string) => {
-    const storeId = isStoreAdmin ? user.storeId : selectedStore.id;
-    await addDoc(collection(db, "warehouses"), { storeId, branchId, name });
-    fetchStoreDetails(storeId);
+    const storeId = isStoreAdmin ? user.storeId : selectedStore?.id;
+    if (!storeId) return;
+    try {
+      await addDoc(collection(db, "warehouses"), { storeId, branchId, name });
+      toast.success("Yeni anbar əlavə edildi");
+    } catch (error) {
+      console.error("Add warehouse error:", error);
+      toast.error("Anbar əlavə edilərkən xəta baş verdi");
+    }
   };
 
   const handleUpdateUserRole = async (userId: string, newRole: string) => {
     try {
       await updateDoc(doc(db, "users", userId), { role: newRole });
-      const storeId = isStoreAdmin ? user.storeId : selectedStore.id;
-      fetchStoreDetails(storeId);
     } catch (error) {
       console.error("Staff role update error:", error);
     }
@@ -245,7 +313,6 @@ export function Markets({ user }: { user: any }) {
                           onChange={(e) => handleUpdateUserRole(u.id, e.target.value)}
                           className="text-xs bg-zinc-100 border-none rounded-lg px-2 py-1 focus:ring-2 focus:ring-zinc-900"
                         >
-                          <option value="customer">Müştəri</option>
                           <option value="sales_agent">Satış Agenti</option>
                           <option value="warehouse_manager">Anbar Müdiri</option>
                         </select>

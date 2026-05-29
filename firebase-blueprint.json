@@ -8,7 +8,7 @@
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "email": { "type": "string", "format": "email" },
         "displayName": { "type": "string" },
-        "role": { "type": "string", "enum": ["super_admin", "store_admin", "warehouse_manager", "sales_agent", "customer"] },
+        "role": { "type": "string", "enum": ["super_admin", "store_admin", "warehouse_manager", "sales_agent"] },
         "storeId": { "type": "string", "description": "ID of the store this user belongs to" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -165,6 +165,23 @@
       },
       "required": ["sellerId", "marketId", "items", "totalAmount", "paymentMethod", "createdAt"]
     },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "A completed purchase transaction from a supplier.",
+      "type": "object",
+      "properties": {
+        "buyerId": { "type": "string" },
+        "storeId": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "purchasePrice": { "type": "number" }, "quantity": { "type": "integer" } } } },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "card", "credit"] },
+        "paymentStatus": { "type": "string", "enum": ["paid", "unpaid"] },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["buyerId", "storeId", "items", "totalAmount", "paymentMethod", "createdAt"]
+    },
     "DebtPayment": {
       "title": "Debt Payment",
       "description": "A payment made by a client to reduce their debt.",
@@ -179,6 +196,127 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["clientId", "clientName", "amount", "recordedBy", "storeId", "createdAt"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Store expenses (rent, salary, utilities, etc.).",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "note": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "amount", "category", "recordedBy", "date"]
+    },
+    "Return": {
+      "title": "Return",
+      "description": "Product returns from customers or to suppliers.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "type": { "type": "string", "enum": ["customer_return", "supplier_return"] },
+        "originalTransactionId": { "type": "string" },
+        "items": { 
+          "type": "array", 
+          "items": { 
+            "type": "object", 
+            "properties": { 
+              "id": { "type": "string" }, 
+              "name": { "type": "string" }, 
+              "quantity": { "type": "integer" }, 
+              "price": { "type": "number" } 
+            } 
+          } 
+        },
+        "totalRefund": { "type": "number" },
+        "reason": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "type", "items", "totalRefund", "recordedBy", "date"]
+    },
+    "Cashbox": {
+      "title": "Cashbox",
+      "description": "Store bank accounts, POS terminals, or physical cash registers.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["cash", "card", "bank"] },
+        "balance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "name", "type", "balance", "createdAt"]
+    },
+    "CashboxTransaction": {
+      "title": "Cashbox Transaction",
+      "description": "Income, expense, or transfer records for cashboxes.",
+      "type": "object",
+      "properties": {
+        "cashboxId": { "type": "string" },
+        "storeId": { "type": "string" },
+        "type": { "type": "string", "enum": ["income", "expense", "transfer"] },
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "recordedBy": { "type": "string" }
+      },
+      "required": ["cashboxId", "storeId", "type", "amount", "date", "recordedBy"]
+    },
+    "SupplierPayment": {
+      "title": "Supplier Payment",
+      "description": "A payment made to a supplier to reduce our debt.",
+      "type": "object",
+      "properties": {
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "amount": { "type": "number" },
+        "note": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "storeId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["supplierId", "supplierName", "amount", "recordedBy", "storeId", "createdAt"]
+    },
+    "WriteOff": {
+      "title": "Write Off",
+      "description": "Products written off due to damage, expiration, etc.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "items": { 
+          "type": "array", 
+          "items": { 
+            "type": "object", 
+            "properties": { 
+              "id": { "type": "string" }, 
+              "name": { "type": "string" }, 
+              "quantity": { "type": "integer" }, 
+              "cost": { "type": "number" } 
+            } 
+          } 
+        },
+        "totalLoss": { "type": "number" },
+        "reason": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "items", "totalLoss", "reason", "recordedBy", "date"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "System audit logs for admin actions.",
+      "type": "object",
+      "properties": {
+        "adminId": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminId", "action", "timestamp"]
     }
   },
   "firestore": {
@@ -193,6 +331,15 @@
     "/orders/{orderId}": { "schema": "Order", "description": "Customer orders" },
     "/contacts/{contactId}": { "schema": "Contact", "description": "Clients and Suppliers" },
     "/sales/{saleId}": { "schema": "Sale", "description": "Sales transactions" },
-    "/debt_payments/{paymentId}": { "schema": "DebtPayment", "description": "Debt payment history" }
+    "/purchases/{purchaseId}": { "schema": "Purchase", "description": "Purchase transactions from suppliers" },
+    "/debt_payments/{paymentId}": { "schema": "DebtPayment", "description": "Debt payment history" },
+    "/expenses/{expenseId}": { "schema": "Expense", "description": "Store expenses" },
+    "/returns/{returnId}": { "schema": "Return", "description": "Product returns" },
+    "/cashboxes/{cashboxId}": { "schema": "Cashbox", "description": "Store cashboxes and bank accounts" },
+    "/cashbox_transactions/{transactionId}": { "schema": "CashboxTransaction", "description": "Cashbox transaction history" },
+    "/supplier_payments/{paymentId}": { "schema": "SupplierPayment", "description": "Payments made to suppliers" },
+    "/write_offs/{writeOffId}": { "schema": "WriteOff", "description": "Damaged or expired product write-offs" },
+    "/audit_logs/{logId}": { "schema": "AuditLog", "description": "Admin action logs" },
+    "/config/{configId}": { "description": "System configuration and API keys" }
   }
 }

@@ -1,82 +1,74 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { db } from "../firebase";
-import { collection, getDocs, doc, updateDoc, setDoc, getDoc, query, where, addDoc } from "firebase/firestore";
-import { 
-  Users, 
-  Key, 
-  Settings, 
-  MapPin, 
-  Warehouse as WarehouseIcon,
-  Loader2,
-  CheckCircle
-} from "lucide-react";
-import { cn } from "../lib/utils";
+import { collection, getDocs, doc, updateDoc, setDoc, getDoc, query, where, addDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { Loader2 } from "lucide-react";
 import { UserManagement } from "./admin/UserManagement";
 import { StoreManagement } from "./admin/StoreManagement";
 import { SystemSettings } from "./admin/SystemSettings";
 import { seedDatabase } from "../lib/seedData";
+import { AdminHeader } from "./admin/AdminHeader";
+import { AdminTabs } from "./admin/AdminTabs";
+import { SeedModal } from "./admin/SeedModal";
+import { StoreDashboard } from "./admin/StoreDashboard";
+import { AuditLogView } from "./admin/AuditLogView";
+import { useAdminData } from "../hooks/useAdminData";
+import { logAdminAction } from "../lib/audit";
 
 export function AdminPanel({ user }: { user: any }) {
   const isSuperAdmin = user.role === "super_admin";
-  const isStoreAdmin = user.role === "store_admin";
+  const { stores, appSettings: fetchedSettings, apiKeys: fetchedKeys, loading, refreshData } = useAdminData(user);
   
-  const [activeSubTab, setActiveSubTab] = useState(isSuperAdmin ? "users" : "store_users");
-  const [users, setUsers] = useState<any[]>([]);
-  const [stores, setStores] = useState<any[]>([]);
-  const [branches, setBranches] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [apiKeys, setApiKeys] = useState({ gemini: "" });
-  const [appSettings, setAppSettings] = useState({ companyName: "AnbarAİ", vatRate: 18 });
+  const [activeSubTab, setActiveSubTab] = useState(isSuperAdmin ? "dashboard" : "store_users");
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
-  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [newUser, setNewUser] = useState({ email: "", displayName: "", role: "customer", storeId: isStoreAdmin ? user.storeId : "" });
+  const [isSeedModalOpen, setIsSeedModalOpen] = useState(false);
+  const [users, setUsers] = useState<any[]>([]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        // Fetch Users
-        let usersSnap;
-        if (isSuperAdmin) {
-          usersSnap = await getDocs(collection(db, "users"));
-        } else {
-          usersSnap = await getDocs(query(collection(db, "users"), where("storeId", "==", user.storeId)));
-        }
-        setUsers(usersSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+  // Real-time user list
+  React.useEffect(() => {
+    const isSuperAdmin = user.role === "super_admin";
+    if (!isSuperAdmin && !user.storeId) {
+      setUsers([]);
+      return;
+    }
 
-        if (isSuperAdmin) {
-          // Fetch Stores
-          const storesSnap = await getDocs(collection(db, "stores"));
-          setStores(storesSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-
-          // Fetch Config (API Keys & Settings)
-          const configDoc = await getDoc(doc(db, "config", "settings"));
-          if (configDoc.exists()) {
-            const data = configDoc.data();
-            setApiKeys(data.apiKeys || { gemini: "" });
-            setAppSettings(data.appSettings || { companyName: "AnbarAİ", vatRate: 18 });
-          }
-        } else {
-          // Fetch Store Specific Data (Branches, Warehouses)
-          const bSnap = await getDocs(query(collection(db, "branches"), where("storeId", "==", user.storeId)));
-          const wSnap = await getDocs(query(collection(db, "warehouses"), where("storeId", "==", user.storeId)));
-          setBranches(bSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-          setWarehouses(wSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        }
-      } catch (error) {
-        console.error("Admin fetch error:", error);
-      } finally {
-        setLoading(false);
+    let q = query(collection(db, "users"));
+    
+    if (!isSuperAdmin) {
+      const storeId = user.storeId || "default";
+      q = query(collection(db, "users"), where("storeId", "==", storeId));
+    }
+    
+    const unsub = onSnapshot(q, (snapshot) => {
+      setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error: any) => {
+      if (error?.message?.includes("Quota limit exceeded") || error?.code === "resource-exhausted") {
+        console.warn("Firestore onSnapshot error (users): Quota limit exceeded.");
+      } else {
+        console.error("Firestore onSnapshot error (users):", error);
       }
-    };
-    fetchData();
-  }, [user.storeId, isSuperAdmin]);
+    });
+    return () => unsub();
+  }, [isSuperAdmin, user.storeId]);
+
+  // Local state for settings form
+  const [localSettings, setLocalSettings] = useState({ companyName: "AnbarAİ", vatRate: 18 });
+  const [localKeys, setLocalKeys] = useState({ gemini: "" });
+
+  // Sync fetched settings to local state
+  React.useEffect(() => {
+    if (fetchedSettings) setLocalSettings(fetchedSettings);
+    if (fetchedKeys) setLocalKeys(fetchedKeys);
+  }, [fetchedSettings, fetchedKeys]);
+
+  const showStatus = (msg: string) => {
+    setSaveStatus(msg);
+    setTimeout(() => setSaveStatus(null), 3000);
+  };
 
   const handleUpdateRole = async (userId: string, newRole: string) => {
     try {
       await updateDoc(doc(db, "users", userId), { role: newRole });
-      setUsers(users.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      await logAdminAction(user.uid, "update_role", { userId, newRole });
       showStatus("Rol yeniləndi");
     } catch (error) {
       console.error("Role update error:", error);
@@ -86,16 +78,28 @@ export function AdminPanel({ user }: { user: any }) {
   const handleUpdateStore = async (userId: string, storeId: string) => {
     try {
       await updateDoc(doc(db, "users", userId), { storeId: storeId || null });
-      setUsers(users.map(u => u.id === userId ? { ...u, storeId: storeId || null } : u));
+      await logAdminAction(user.uid, "update_store", { userId, storeId });
       showStatus("Mağaza yeniləndi");
     } catch (error) {
       console.error("Store update error:", error);
     }
   };
 
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      await deleteDoc(doc(db, "users", userId));
+      await logAdminAction(user.uid, "delete_user", { userId });
+      showStatus("İstifadəçi silindi");
+    } catch (error: any) {
+      console.error("Delete user error:", error);
+      showStatus(`Xəta baş verdi: ${error.message || 'İcazəniz yoxdur'}`);
+    }
+  };
+
   const handleSaveConfig = async () => {
     try {
-      await setDoc(doc(db, "config", "settings"), { apiKeys, appSettings }, { merge: true });
+      await setDoc(doc(db, "config", "settings"), { apiKeys: localKeys, appSettings: localSettings }, { merge: true });
+      await logAdminAction(user.uid, "save_config", { apiKeys: "hidden", appSettings: localSettings });
       showStatus("Ayarlar yadda saxlanıldı");
     } catch (error) {
       console.error("Config save error:", error);
@@ -103,114 +107,57 @@ export function AdminPanel({ user }: { user: any }) {
   };
 
   const handleSeedDatabase = async () => {
-    if (!window.confirm("Bütün cədvəllərə demo məlumatlar əlavə ediləcək. Davam etmək istəyirsiniz?")) return;
-    
+    setIsSeedModalOpen(false);
     try {
-      setLoading(true);
-      await seedDatabase(user.storeId || "demo-store", user.id || "demo-user");
+      await seedDatabase(user.storeId || "demo-store", user.uid || "demo-user");
+      await logAdminAction(user.uid, "seed_database", {});
       showStatus("Demo məlumatlar uğurla əlavə edildi");
     } catch (error) {
       console.error("Seed error:", error);
       showStatus("Xəta baş verdi");
-    } finally {
-      setLoading(false);
     }
   };
 
-  const handleAddUser = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGenerateApiKey = async (storeId: string) => {
     try {
-      // Since we can't create Auth users from client, we add to 'users' collection.
-      // The user will need to sign up with this email to 'claim' the role.
-      // We use email as a temporary ID if we want, or just addDoc.
-      // Better to use email as ID to prevent duplicates if they sign up later.
-      const userRef = doc(db, "users", newUser.email.toLowerCase());
-      await setDoc(userRef, {
-        email: newUser.email.toLowerCase(),
-        displayName: newUser.displayName,
-        role: newUser.role,
-        storeId: newUser.storeId || null,
-        createdAt: new Date().toISOString()
-      });
-      
-      setUsers([...users, { id: newUser.email.toLowerCase(), ...newUser }]);
-      setIsUserModalOpen(false);
-      setNewUser({ email: "", displayName: "", role: "customer", storeId: "" });
-      showStatus("İstifadəçi əlavə edildi");
+      const newKey = `sk_live_${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`;
+      await updateDoc(doc(db, "stores", storeId), { apiKey: newKey });
+      await logAdminAction(user.uid, "generate_api_key", { storeId });
+      showStatus("API açarı yeni yaradıldı");
+      refreshData();
     } catch (error) {
-      console.error("Add user error:", error);
+      console.error("API key gen error:", error);
+      showStatus("Xəta baş verdi");
     }
   };
 
-  const showStatus = (msg: string) => {
-    setSaveStatus(msg);
-    setTimeout(() => setSaveStatus(null), 3000);
+  const handleUpdateStoreWebhook = async (storeId: string, url: string) => {
+    try {
+      await updateDoc(doc(db, "stores", storeId), { webhookUrl: url });
+      await logAdminAction(user.uid, "update_webhook", { storeId, webhookUrl: url });
+      showStatus("Webhook URL yeniləndi");
+      refreshData();
+    } catch (error) {
+      console.error("Webhook update error:", error);
+      showStatus("Xəta baş verdi");
+    }
   };
 
   if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin" /></div>;
 
   return (
     <div className="space-y-8">
-      <header className="flex justify-between items-center">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Admin Paneli</h2>
-          <p className="text-zinc-500 mt-1">Sistem idarəetməsi və konfiqurasiya.</p>
-        </div>
-        {saveStatus && (
-          <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl animate-in fade-in slide-in-from-top-2">
-            <CheckCircle className="w-4 h-4" />
-            <span className="text-sm font-bold">{saveStatus}</span>
-          </div>
-        )}
-      </header>
+      <AdminHeader saveStatus={saveStatus} />
 
-      {/* Tabs */}
-      <div className="flex gap-2 border-b border-zinc-200 pb-px">
-        {isSuperAdmin ? (
-          [
-            { id: "users", label: "İstifadəçilər", icon: Users },
-            { id: "ai", label: "Aİ (API Keys)", icon: Key },
-            { id: "settings", label: "Tətbiq Ayarları", icon: Settings },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveSubTab(tab.id)}
-              className={cn(
-                "flex items-center gap-2 px-6 py-3 text-sm font-medium transition-all border-b-2",
-                activeSubTab === tab.id
-                  ? "border-zinc-900 text-zinc-900"
-                  : "border-transparent text-zinc-400 hover:text-zinc-600"
-              )}
-            >
-              <tab.icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          ))
-        ) : (
-          [
-            { id: "store_users", label: "İşçilər", icon: Users },
-            { id: "branches", label: "Filiallar", icon: MapPin },
-            { id: "warehouses", label: "Anbarlar", icon: WarehouseIcon },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveSubTab(tab.id)}
-              className={cn(
-                "flex items-center gap-2 px-6 py-3 text-sm font-medium transition-all border-b-2",
-                activeSubTab === tab.id
-                  ? "border-zinc-900 text-zinc-900"
-                  : "border-transparent text-zinc-400 hover:text-zinc-600"
-              )}
-            >
-              <tab.icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          ))
-        )}
-      </div>
+      <AdminTabs 
+        isSuperAdmin={isSuperAdmin}
+        activeSubTab={activeSubTab}
+        setActiveSubTab={setActiveSubTab}
+      />
 
-      {/* Content */}
       <div className="bg-white border border-zinc-100 rounded-3xl p-6 sm:p-8 hover:shadow-sm transition-all">
+        {activeSubTab === "dashboard" && <StoreDashboard stores={stores} />}
+        
         {(activeSubTab === "users" || activeSubTab === "store_users") && (
           <UserManagement
             isSuperAdmin={isSuperAdmin}
@@ -218,30 +165,23 @@ export function AdminPanel({ user }: { user: any }) {
             stores={stores}
             onUpdateRole={handleUpdateRole}
             onUpdateStore={handleUpdateStore}
-            isUserModalOpen={isUserModalOpen}
-            setIsUserModalOpen={setIsUserModalOpen}
-            newUser={newUser}
-            setNewUser={setNewUser}
-            onAddUser={handleAddUser}
-            companyName={appSettings.companyName}
+            onDeleteUser={handleDeleteUser}
+            currentUserUid={user.uid}
+            currentStoreId={user.storeId}
+            companyName={localSettings?.companyName}
+            showStatus={showStatus}
           />
         )}
 
-        {activeSubTab === "branches" && (
-          <StoreManagement type="branches" data={branches} />
-        )}
-
-        {activeSubTab === "warehouses" && (
-          <StoreManagement type="warehouses" data={warehouses} />
-        )}
+        {activeSubTab === "audit" && <AuditLogView />}
 
         {activeSubTab === "ai" && (
           <SystemSettings
             type="ai"
-            apiKeys={apiKeys}
-            setApiKeys={setApiKeys}
-            appSettings={appSettings}
-            setAppSettings={setAppSettings}
+            apiKeys={localKeys}
+            setApiKeys={setLocalKeys}
+            appSettings={localSettings}
+            setAppSettings={setLocalSettings}
             onSave={handleSaveConfig}
           />
         )}
@@ -249,15 +189,24 @@ export function AdminPanel({ user }: { user: any }) {
         {activeSubTab === "settings" && (
           <SystemSettings
             type="settings"
-            apiKeys={apiKeys}
-            setApiKeys={setApiKeys}
-            appSettings={appSettings}
-            setAppSettings={setAppSettings}
+            apiKeys={localKeys}
+            setApiKeys={setLocalKeys}
+            appSettings={localSettings}
+            setAppSettings={setLocalSettings}
             onSave={handleSaveConfig}
-            onSeedDatabase={handleSeedDatabase}
+            onSeedDatabase={() => setIsSeedModalOpen(true)}
+            stores={stores}
+            onGenerateApiKey={handleGenerateApiKey}
+            onUpdateStoreWebhook={handleUpdateStoreWebhook}
           />
         )}
       </div>
+
+      <SeedModal 
+        isOpen={isSeedModalOpen} 
+        onClose={() => setIsSeedModalOpen(false)} 
+        onConfirm={handleSeedDatabase} 
+      />
     </div>
   );
 }

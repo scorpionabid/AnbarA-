@@ -4,9 +4,10 @@ import { MapPin, Warehouse as WarehouseIcon, Plus, Edit2, Trash2 } from "lucide-
 interface StoreManagementProps {
   type: "branches" | "warehouses";
   data: any[];
+  onAddClick: () => void;
 }
 
-export function StoreManagement({ type, data }: StoreManagementProps) {
+export function StoreManagement({ type, data, onAddClick }: StoreManagementProps) {
   const isBranches = type === "branches";
 
   return (
@@ -16,13 +17,18 @@ export function StoreManagement({ type, data }: StoreManagementProps) {
           {isBranches ? <MapPin className="w-5 h-5 text-zinc-400" /> : <WarehouseIcon className="w-5 h-5 text-zinc-400" />}
           {isBranches ? "Filiallar" : "Anbarlar"}
         </h3>
-        <button className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 rounded-xl hover:bg-zinc-800 transition-colors text-sm">
-          <Plus className="w-4 h-4" />
-          {isBranches ? "Filial Əlavə Et" : "Anbar Əlavə Et"}
-        </button>
+        {onAddClick && (
+          <button 
+            onClick={onAddClick}
+            className="flex items-center gap-2 bg-zinc-900 text-white px-4 py-2 rounded-xl hover:bg-zinc-800 transition-colors text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            {isBranches ? "Filial Əlavə Et" : "Anbar Əlavə Et"}
+          </button>
+        )}
       </div>
-      <div className="bg-white border border-zinc-100 rounded-3xl overflow-hidden hover:shadow-sm transition-all">
-        <table className="w-full text-left">
+        <div className="bg-white border border-zinc-100 rounded-3xl overflow-hidden hover:shadow-sm transition-all overflow-x-auto">
+          <table className="w-full text-left whitespace-nowrap min-w-[500px]">
           <thead className="bg-zinc-50 border-b border-zinc-200">
             <tr>
               <th className="px-6 py-4 text-xs font-bold text-zinc-400 uppercase tracking-wider">

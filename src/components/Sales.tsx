@@ -1,26 +1,33 @@
-import { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { db } from "../firebase";
-import { collection, getDocs, addDoc, doc, updateDoc, increment, serverTimestamp, query, where, orderBy, limit } from "firebase/firestore";
+import { collection, getDocs, addDoc, doc, updateDoc, increment, serverTimestamp, query, where, orderBy, limit, deleteDoc, onSnapshot } from "firebase/firestore";
 import { 
   ShoppingCart, 
   Search, 
-  Filter, 
   Loader2, 
   CheckCircle, 
-  ShoppingBag, 
   Plus, 
-  Minus, 
   Trash2, 
-  CreditCard, 
-  Banknote,
   ChevronRight,
   Package,
   Users,
   X,
-  History
+  History,
+  Printer,
+  Receipt,
+  Save,
+  Barcode,
+  FileText,
+  MessageCircle
 } from "lucide-react";
+import { ProductGrid } from "./sales/ProductGrid";
+import { Cart } from "./sales/Cart";
 import { motion, AnimatePresence } from "motion/react";
+import { canRecordSales, canManageStores } from "../lib/permissions";
 import { cn } from "../lib/utils";
+import { toast } from "sonner";
+import { useCashboxes } from "../hooks/useCashboxes";
+import { addCashboxTransaction } from "../lib/financeUtils";
 
 interface Product {
   id: string;
@@ -31,6 +38,7 @@ interface Product {
   category: string;
   imageUrl?: string;
   description?: string;
+  status?: "active" | "passive";
 }
 
 interface CartItem extends Product {
@@ -52,37 +60,109 @@ export function Sales({ user }: { user: any }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [cartSearchQuery, setCartSearchQuery] = useState("");
   const [recentSales, setRecentSales] = useState<any[]>([]);
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [discount, setDiscount] = useState(0);
+  const [discountType, setDiscountType] = useState<"fixed" | "percentage">("fixed");
+  const [tax, setTax] = useState(0);
+  const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [lastCompletedSale, setLastCompletedSale] = useState<any>(null);
+  const [isDraftsModalOpen, setIsDraftsModalOpen] = useState(false);
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const { cashboxes } = useCashboxes(user);
+  const [selectedCashbox, setSelectedCashbox] = useState<string>("");
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [productsSnap, clientsSnap, salesSnap] = await Promise.all([
-          getDocs(collection(db, "products")),
-          getDocs(query(collection(db, "contacts"), where("type", "==", "client"))),
-          getDocs(query(collection(db, "sales"), orderBy("createdAt", "desc"), limit(5)))
-        ]);
-        
-        setProducts(productsSnap.docs.map(d => ({ id: d.id, ...(d.data() as object) } as Product)));
-        setClients(clientsSnap.docs.map(d => ({ id: d.id, ...(d.data() as object) })));
-        setRecentSales(salesSnap.docs.map(d => ({ id: d.id, ...(d.data() as object) })));
-      } catch (error) {
-        console.error("Məlumatlar yüklənərkən xəta:", error);
-      } finally {
-        setLoading(false);
+    if (paymentMethod !== "credit" && cashboxes.length > 0) {
+      const defaultCashbox = cashboxes.find(c => 
+        paymentMethod === "cash" ? c.type === "cash" : 
+        paymentMethod === "card" ? c.type === "card" || c.type === "bank" : true
+      );
+      if (defaultCashbox && !selectedCashbox) {
+        setSelectedCashbox(defaultCashbox.id);
       }
+    }
+  }, [paymentMethod, cashboxes, selectedCashbox]);
+
+  useEffect(() => {
+    if (!canManageStores(user) && !user.storeId) {
+      setLoading(false);
+      return;
+    }
+
+    let productsQuery = collection(db, "products") as any;
+    let clientsQuery = query(collection(db, "contacts"), where("type", "==", "client"));
+    let salesQuery = query(collection(db, "sales"), orderBy("createdAt", "desc"), limit(5));
+    let draftsQuery = query(collection(db, "sale_drafts"), where("userId", "==", user.uid), orderBy("createdAt", "desc"));
+
+    if (!canRecordSales(user)) {
+      const storeId = user.storeId || "default";
+      productsQuery = query(collection(db, "products"), where("storeId", "==", storeId));
+      clientsQuery = query(collection(db, "contacts"), where("type", "==", "client"), where("storeId", "==", storeId));
+      salesQuery = query(collection(db, "sales"), where("marketId", "==", storeId), orderBy("createdAt", "desc"), limit(5));
+      draftsQuery = query(collection(db, "sale_drafts"), where("userId", "==", user.uid), where("storeId", "==", storeId), orderBy("createdAt", "desc"));
+    }
+
+    const unsubProducts = onSnapshot(productsQuery as any, (snap: any) => {
+      setProducts(snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as object) } as Product)).filter((p: Product) => p.status !== "passive"));
+      setLoading(false);
+    }, (error: any) => {
+      if (error?.message?.includes("Quota") || error?.code === "resource-exhausted") {
+        console.warn("Products snapshot quota exceeded");
+      } else {
+        console.error("Products snapshot error:", error);
+        toast.error("Məhsullar yüklənərkən xəta baş verdi");
+      }
+      setLoading(false);
+    });
+
+    const unsubClients = onSnapshot(clientsQuery as any, (snap: any) => {
+      setClients(snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as object) })));
+    }, (error: any) => {
+      if (error?.message?.includes("Quota") || error?.code === "resource-exhausted") {
+        console.warn("Clients snapshot quota exceeded");
+      } else {
+        console.error("Clients snapshot error:", error);
+      }
+    });
+
+    const unsubSales = onSnapshot(salesQuery as any, (snap: any) => {
+      setRecentSales(snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as object) })));
+    }, (error: any) => {
+      if (error?.message?.includes("Quota") || error?.code === "resource-exhausted") {
+        console.warn("Sales snapshot quota exceeded");
+      } else {
+        console.error("Sales snapshot error:", error);
+      }
+    });
+
+    const unsubDrafts = onSnapshot(draftsQuery as any, (snap: any) => {
+      setDrafts(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
+    }, (error: any) => {
+      if (error?.message?.includes("Quota") || error?.code === "resource-exhausted") {
+        console.warn("Drafts snapshot quota exceeded");
+      } else {
+        console.error("Drafts snapshot error:", error);
+      }
+    });
+
+    return () => {
+      unsubProducts();
+      unsubClients();
+      unsubSales();
+      unsubDrafts();
     };
-    fetchData();
-  }, []);
+  }, [user.uid, user.storeId, user.role]);
 
   const categories = useMemo(() => {
-    const cats = ["Hamısı", ...new Set(products.map(p => p.category).filter(Boolean))];
+    const cats = ["Hamısı", ...new Set(products.map(p => (p as any).categoryName || p.category).filter(Boolean))];
     return cats;
   }, [products]);
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesCategory = selectedCategory === "Hamısı" || p.category === selectedCategory;
+      const cat = (p as any).categoryName || p.category;
+      const matchesCategory = selectedCategory === "Hamısı" || cat === selectedCategory;
       return matchesSearch && matchesCategory;
     });
   }, [products, searchQuery, selectedCategory]);
@@ -91,13 +171,91 @@ export function Sales({ user }: { user: any }) {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
-        if (existing.quantity >= product.stock) return prev;
+        if (existing.quantity >= product.stock) {
+          toast.error("Anbarda kifayət qədər məhsul yoxdur");
+          return prev;
+        }
         return prev.map(item => 
           item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
       return [...prev, { ...product, quantity: 1 }];
     });
+  };
+
+  const handleBarcodeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const product = products.find(p => 
+      (p as any).barcode === barcodeInput || (p as any).sku === barcodeInput
+    );
+    if (product) {
+      addToCart(product);
+      setBarcodeInput("");
+      toast.success(`${product.name} səbətə əlavə edildi`);
+    } else {
+      toast.error("Məhsul tapılmadı");
+    }
+  };
+
+  const subtotal = useMemo(() => {
+    return cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  }, [cart]);
+
+  const totalAmount = useMemo(() => {
+    const discountAmount = discountType === "percentage" ? subtotal * (discount / 100) : discount;
+    const discounted = subtotal - discountAmount;
+    const taxed = discounted * (1 + tax / 100);
+    return Math.max(0, taxed);
+  }, [subtotal, discount, discountType, tax]);
+
+  const handleSaveDraft = async () => {
+    if (cart.length === 0) return;
+    try {
+      await addDoc(collection(db, "sale_drafts"), {
+        items: cart,
+        discount,
+        discountType,
+        tax,
+        selectedClient: selectedClient ? { id: selectedClient.id, name: selectedClient.name } : null,
+        paymentMethod,
+        channel,
+        createdAt: serverTimestamp(),
+        userId: user.uid,
+        storeId: user.storeId || "default"
+      });
+      setCart([]);
+      setDiscount(0);
+      setDiscountType("fixed");
+      setTax(0);
+      setSelectedClient(null);
+      toast.success("Qaralama yadda saxlanıldı");
+    } catch (error) {
+      toast.error("Xəta baş verdi");
+    }
+  };
+
+  const loadDraft = (draft: any) => {
+    setCart(draft.items);
+    setDiscount(draft.discount || 0);
+    setDiscountType(draft.discountType || "fixed");
+    setTax(draft.tax || 0);
+    if (draft.selectedClient) {
+      const client = clients.find(c => c.id === draft.selectedClient.id);
+      setSelectedClient(client || null);
+    }
+    setPaymentMethod(draft.paymentMethod || "cash");
+    setChannel(draft.channel || "offline");
+    setIsDraftsModalOpen(false);
+    toast.success("Qaralama yükləndi");
+  };
+
+  const deleteDraft = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "sale_drafts", id));
+      toast.success("Qaralama silindi");
+    } catch (error) {
+      toast.error("Xəta baş verdi");
+    }
   };
 
   const removeFromCart = (productId: string) => {
@@ -116,7 +274,14 @@ export function Sales({ user }: { user: any }) {
     }));
   };
 
-  const totalAmount = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  const updatePrice = (productId: string, newPrice: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.id === productId) {
+        return { ...item, price: newPrice };
+      }
+      return item;
+    }));
+  };
 
   const filteredCart = useMemo(() => {
     return cart.filter(item => 
@@ -127,7 +292,11 @@ export function Sales({ user }: { user: any }) {
   const handleCompleteSale = async () => {
     if (cart.length === 0 || isProcessing) return;
     if (paymentMethod === "credit" && !selectedClient) {
-      alert("Nisyə satış üçün müştəri seçilməlidir.");
+      toast.error("Nisyə satış üçün müştəri seçilməlidir.");
+      return;
+    }
+    if (paymentMethod !== "credit" && !selectedCashbox) {
+      toast.error("Zəhmət olmasa kassa seçin.");
       return;
     }
     
@@ -136,7 +305,7 @@ export function Sales({ user }: { user: any }) {
       // 1. Record the sale
       const saleData = {
         sellerId: user.uid,
-        marketId: user.marketId || "default",
+        marketId: user.storeId || "default",
         items: cart.map(item => ({
           id: item.id,
           name: item.name,
@@ -144,6 +313,10 @@ export function Sales({ user }: { user: any }) {
           purchasePrice: item.purchasePrice || 0,
           quantity: item.quantity
         })),
+        subtotal,
+        discount,
+        discountType,
+        tax,
         totalAmount,
         paymentMethod,
         paymentStatus: paymentMethod === "credit" ? "unpaid" : "paid",
@@ -153,13 +326,24 @@ export function Sales({ user }: { user: any }) {
         createdAt: serverTimestamp(),
       };
       
-      await addDoc(collection(db, "sales"), saleData);
+      const saleRef = await addDoc(collection(db, "sales"), saleData);
+      setLastCompletedSale({ ...saleData, id: saleRef.id, createdAt: new Date() });
 
-      // Refresh recent sales
-      const salesSnap = await getDocs(query(collection(db, "sales"), orderBy("createdAt", "desc"), limit(5)));
-      setRecentSales(salesSnap.docs.map(d => ({ id: d.id, ...(d.data() as object) })));
+      // 2. Add cashbox transaction if paid
+      if (paymentMethod !== "credit" && selectedCashbox) {
+        await addCashboxTransaction(
+          selectedCashbox,
+          user.storeId || "default",
+          "income",
+          totalAmount,
+          `Satış #${saleRef.id.slice(-6).toUpperCase()}${selectedClient ? ` (${selectedClient.name})` : ""}`,
+          user.displayName || user.email,
+          saleRef.id,
+          "sale"
+        );
+      }
 
-      // 2. Update stock for each product
+      // 3. Update stock for each product
       const updatePromises = cart.map(item => 
         updateDoc(doc(db, "products", item.id), {
           stock: increment(-item.quantity)
@@ -179,10 +363,14 @@ export function Sales({ user }: { user: any }) {
 
       // 4. Success state
       setCart([]);
+      setDiscount(0);
+      setDiscountType("fixed");
+      setTax(0);
       setSelectedClient(null);
       setPaymentMethod("cash");
       setChannel("offline");
       setOrderSuccess(true);
+      setIsReceiptModalOpen(true);
       
       // Refresh local products list to reflect new stock
       setProducts(prev => prev.map(p => {
@@ -194,7 +382,7 @@ export function Sales({ user }: { user: any }) {
       setTimeout(() => setOrderSuccess(false), 3000);
     } catch (error) {
       console.error("Satış tamamlanarkən xəta:", error);
-      alert("Satış zamanı xəta baş verdi.");
+      toast.error("Satış zamanı xəta baş verdi.");
     } finally {
       setIsProcessing(false);
     }
@@ -207,35 +395,113 @@ export function Sales({ user }: { user: any }) {
     </div>
   );
 
+  const sendToWhatsApp = () => {
+    if (!lastCompletedSale) return;
+    
+    let message = `*Satış Qəbzi*\nID: #${lastCompletedSale.id.slice(-6).toUpperCase()}\n\n`;
+    
+    lastCompletedSale.items.forEach((item: any) => {
+      message += `${item.quantity}x ${item.name} - ₼${(item.price * item.quantity).toFixed(2)}\n`;
+    });
+    
+    message += `\nCəmi: ₼${lastCompletedSale.subtotal.toFixed(2)}\n`;
+    
+    if (lastCompletedSale.discount > 0) {
+      const discountAmount = lastCompletedSale.discountType === 'percentage' 
+        ? lastCompletedSale.subtotal * (lastCompletedSale.discount / 100) 
+        : lastCompletedSale.discount;
+      message += `Endirim: -₼${discountAmount.toFixed(2)}\n`;
+    }
+    
+    if (lastCompletedSale.tax > 0) {
+      const taxAmount = (lastCompletedSale.subtotal - (lastCompletedSale.discountType === 'percentage' ? lastCompletedSale.subtotal * (lastCompletedSale.discount / 100) : lastCompletedSale.discount)) * (lastCompletedSale.tax / 100);
+      message += `Vergi: ₼${taxAmount.toFixed(2)}\n`;
+    }
+    
+    message += `*Yekun: ₼${lastCompletedSale.totalAmount.toFixed(2)}*\n`;
+    
+    const encodedMessage = encodeURIComponent(message);
+    window.open(`https://wa.me/?text=${encodedMessage}`, '_blank');
+  };
+
   return (
-    <div className="flex flex-col lg:flex-row gap-8 h-[calc(100vh-12rem)]">
-      {/* Left Side: Product Selection */}
-      <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+    <div className="flex flex-col gap-8 h-auto">
+      <Cart
+        cart={cart}
+        filteredCart={filteredCart}
+        cartSearchQuery={cartSearchQuery}
+        setCartSearchQuery={setCartSearchQuery}
+        updateQuantity={updateQuantity}
+        updatePrice={updatePrice}
+        removeFromCart={removeFromCart}
+        subtotal={subtotal}
+        totalAmount={totalAmount}
+        discount={discount}
+        setDiscount={setDiscount}
+        discountType={discountType}
+        setDiscountType={setDiscountType}
+        tax={tax}
+        setTax={setTax}
+        paymentMethod={paymentMethod}
+        setPaymentMethod={setPaymentMethod}
+        channel={channel}
+        setChannel={setChannel}
+        isProcessing={isProcessing}
+        onSaveDraft={handleSaveDraft}
+        onCompleteSale={handleCompleteSale}
+        selectedClient={selectedClient}
+        onOpenClientModal={() => setIsClientModalOpen(true)}
+        recentSales={recentSales}
+        cashboxes={cashboxes}
+        selectedCashbox={selectedCashbox}
+        setSelectedCashbox={setSelectedCashbox}
+      />
+
+      {/* Bottom Side: Product Selection */}
+      <div className="flex-1 flex flex-col gap-6 overflow-hidden min-h-[500px]">
         <header className="space-y-4">
           <div className="flex justify-between items-end">
             <div>
               <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Satış Paneli</h2>
               <p className="text-zinc-500 mt-1">Sürətli satış və stok idarəetməsi.</p>
             </div>
-            {orderSuccess && (
-              <motion.div 
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-bold border border-emerald-100"
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsDraftsModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-zinc-100 text-zinc-600 rounded-xl text-sm font-bold hover:bg-zinc-200 transition-all"
               >
-                <CheckCircle className="w-4 h-4" />
-                Satış uğurla tamamlandı!
-              </motion.div>
-            )}
+                <Save className="w-4 h-4" />
+                Qaralamalar
+              </button>
+              {orderSuccess && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-bold border border-emerald-100"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Satış uğurla tamamlandı!
+                </motion.div>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col md:flex-row gap-4">
+            <form onSubmit={handleBarcodeSubmit} className="relative flex-1">
+              <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input
+                value={barcodeInput}
+                onChange={(e) => setBarcodeInput(e.target.value)}
+                placeholder="Barkod və ya SKU skan edin..."
+                className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all font-mono"
+              />
+            </form>
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Məhsul, barkod və ya kateqoriya axtar..."
+                placeholder="Məhsul və ya kateqoriya axtar..."
                 className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
               />
             </div>
@@ -258,295 +524,7 @@ export function Sales({ user }: { user: any }) {
         </header>
 
         <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filteredProducts.map((p) => (
-              <motion.button
-                layout
-                key={p.id}
-                onClick={() => addToCart(p)}
-                disabled={p.stock <= 0}
-                className={`group relative flex flex-col bg-white border border-zinc-100 rounded-3xl overflow-hidden hover:border-zinc-300 hover:shadow-sm transition-all text-left ${p.stock <= 0 ? 'opacity-50 grayscale cursor-not-allowed' : 'active:scale-95'}`}
-              >
-                <div className="aspect-square bg-zinc-100 relative overflow-hidden">
-                  {p.imageUrl ? (
-                    <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-zinc-300">
-                      <ShoppingBag className="w-10 h-10" />
-                    </div>
-                  )}
-                  {p.stock <= 5 && p.stock > 0 && (
-                    <div className="absolute top-2 left-2 bg-orange-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
-                      Az qalıb: {p.stock}
-                    </div>
-                  )}
-                  {p.stock <= 0 && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white font-bold text-sm">
-                      Bitib
-                    </div>
-                  )}
-                </div>
-                
-                <div className="p-4 flex-1 flex flex-col justify-between gap-2">
-                  <div>
-                    <h4 className="font-bold text-zinc-900 text-sm line-clamp-1">{p.name}</h4>
-                    <p className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">{p.category}</p>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg font-black text-zinc-900">₼{p.price}</span>
-                    <div className="w-8 h-8 bg-zinc-100 rounded-xl flex items-center justify-center group-hover:bg-zinc-900 group-hover:text-white transition-colors">
-                      <Plus className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
-              </motion.button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right Side: Cart / Checkout */}
-      <div className="w-full lg:w-[400px] flex flex-col bg-zinc-900 rounded-[2.5rem] text-white p-8 shadow-2xl relative overflow-hidden">
-        {/* Background Accent */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-3xl" />
-        
-        <div className="relative flex flex-col h-full">
-          <div className="flex justify-between items-center mb-8">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white/10 rounded-2xl flex items-center justify-center">
-                <ShoppingCart className="w-5 h-5 text-white" />
-              </div>
-              <h3 className="font-bold text-xl">Səbət</h3>
-            </div>
-            <span className="bg-white/10 px-3 py-1 rounded-full text-xs font-bold text-zinc-400">
-              {cart.reduce((acc, item) => acc + item.quantity, 0)} ədəd
-            </span>
-          </div>
-
-          {cart.length > 0 && (
-            <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
-              <input
-                value={cartSearchQuery}
-                onChange={(e) => setCartSearchQuery(e.target.value)}
-                placeholder="Səbətdə axtar..."
-                className="w-full pl-8 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-white/20 transition-all"
-              />
-            </div>
-          )}
-
-          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4 mb-8">
-            <AnimatePresence mode="popLayout">
-              {cart.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-zinc-500 gap-4 py-12">
-                  <Package className="w-12 h-12 opacity-20" />
-                  <p className="text-sm font-medium">Səbət boşdur</p>
-                </div>
-              ) : filteredCart.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-zinc-500 gap-4 py-12">
-                  <Search className="w-12 h-12 opacity-20" />
-                  <p className="text-sm font-medium">Nəticə tapılmadı</p>
-                </div>
-              ) : (
-                filteredCart.map((item) => (
-                  <motion.div
-                    layout
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    key={item.id}
-                    className="group bg-white/5 border border-white/5 p-4 rounded-3xl hover:bg-white/10 transition-all"
-                  >
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1">
-                        <h4 className="font-bold text-sm line-clamp-1">{item.name}</h4>
-                        <p className="text-zinc-500 text-xs">₼{item.price} / ədəd</p>
-                      </div>
-                      <button 
-                        onClick={() => removeFromCart(item.id)}
-                        className="text-zinc-600 hover:text-red-400 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center bg-black/20 rounded-xl p-1">
-                        <button 
-                          onClick={() => updateQuantity(item.id, -1)}
-                          className="w-8 h-8 flex items-center justify-center hover:bg-white/10 rounded-lg transition-colors"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="w-10 text-center font-bold text-sm">{item.quantity}</span>
-                        <button 
-                          onClick={() => updateQuantity(item.id, 1)}
-                          className="w-8 h-8 flex items-center justify-center hover:bg-white/10 rounded-lg transition-colors"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <span className="font-black text-lg">₼{(item.price * item.quantity).toFixed(2)}</span>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </AnimatePresence>
-          </div>
-
-          <div className="space-y-6">
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setChannel("offline")}
-                className={`py-2 rounded-xl font-bold text-xs transition-all ${
-                  channel === "offline" 
-                  ? "bg-white text-zinc-900 shadow-lg" 
-                  : "bg-white/5 text-zinc-500 hover:bg-white/10"
-                }`}
-              >
-                🏪 Mağaza
-              </button>
-              <button
-                onClick={() => setChannel("online")}
-                className={`py-2 rounded-xl font-bold text-xs transition-all ${
-                  channel === "online" 
-                  ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" 
-                  : "bg-white/5 text-zinc-500 hover:bg-white/10"
-                }`}
-              >
-                🌐 Onlayn
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <button
-                onClick={() => setPaymentMethod("cash")}
-                className={`flex flex-col items-center justify-center gap-1 py-3 rounded-2xl font-bold text-xs transition-all ${
-                  paymentMethod === "cash" 
-                  ? "bg-white text-zinc-900 shadow-xl" 
-                  : "bg-white/5 text-zinc-500 hover:bg-white/10"
-                }`}
-              >
-                <Banknote className="w-4 h-4" />
-                Nağd
-              </button>
-              <button
-                onClick={() => setPaymentMethod("card")}
-                className={`flex flex-col items-center justify-center gap-1 py-3 rounded-2xl font-bold text-xs transition-all ${
-                  paymentMethod === "card" 
-                  ? "bg-white text-zinc-900 shadow-xl" 
-                  : "bg-white/5 text-zinc-500 hover:bg-white/10"
-                }`}
-              >
-                <CreditCard className="w-4 h-4" />
-                Kart
-              </button>
-              <button
-                onClick={() => {
-                  setPaymentMethod("credit");
-                  setIsClientModalOpen(true);
-                }}
-                className={`flex flex-col items-center justify-center gap-1 py-3 rounded-2xl font-bold text-xs transition-all ${
-                  paymentMethod === "credit" 
-                  ? "bg-white text-zinc-900 shadow-xl" 
-                  : "bg-white/5 text-zinc-500 hover:bg-white/10"
-                }`}
-              >
-                <Users className="w-4 h-4" />
-                Nisyə
-              </button>
-            </div>
-
-            {paymentMethod === "credit" && selectedClient && (
-              <div className="bg-white/10 p-4 rounded-2xl flex justify-between items-center">
-                <div>
-                  <p className="text-[10px] text-zinc-500 uppercase font-bold">Müştəri</p>
-                  <p className="text-sm font-bold">{selectedClient.name}</p>
-                </div>
-                <button 
-                  onClick={() => setIsClientModalOpen(true)}
-                  className="text-xs text-zinc-400 hover:text-white underline"
-                >
-                  Dəyiş
-                </button>
-              </div>
-            )}
-
-            <div className="bg-white/5 p-6 rounded-[2rem] space-y-2">
-              <div className="flex justify-between items-center text-zinc-500 text-sm">
-                <span>Cəmi məbləğ</span>
-                <span>₼{totalAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-zinc-400 font-medium">Ödəniləcək:</span>
-                <span className="text-3xl font-black">₼{totalAmount.toFixed(2)}</span>
-              </div>
-            </div>
-
-            <button
-              disabled={cart.length === 0 || isProcessing}
-              onClick={handleCompleteSale}
-              className="group w-full bg-white text-zinc-900 py-5 rounded-[2rem] font-black text-lg hover:bg-zinc-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 flex items-center justify-center gap-3"
-            >
-              {isProcessing ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : (
-                <>
-                  Satışı Tamamla
-                  <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
-            </button>
-
-            {/* Recent Sales Section */}
-            <div className="mt-8 pt-8 border-t border-white/10">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Son Satışlar</h4>
-                <History className="w-4 h-4 text-zinc-500" />
-              </div>
-              <div className="space-y-3">
-                {recentSales.map((sale) => (
-                  <div key={sale.id} className="flex justify-between items-center bg-white/5 p-3 rounded-2xl">
-                    <div className="flex flex-col">
-                      <span className="text-[10px] text-zinc-500 font-medium">
-                        {sale.createdAt?.toDate().toLocaleTimeString('az-AZ', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      <span className="text-xs font-bold truncate max-w-[120px]">
-                        {sale.items.length} məhsul
-                      </span>
-                      {sale.channel === 'online' && (
-                        <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded mt-1 w-fit font-bold">
-                          🌐 Onlayn
-                        </span>
-                      )}
-                      {sale.channel === 'offline' && (
-                        <span className="text-[10px] bg-white/10 text-zinc-400 px-1.5 py-0.5 rounded mt-1 w-fit font-bold">
-                          🏪 Mağaza
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <span className="text-xs font-black">₼{sale.totalAmount.toFixed(2)}</span>
-                      <div className="flex items-center gap-1 justify-end">
-                        <div className={cn(
-                          "w-1.5 h-1.5 rounded-full",
-                          sale.paymentMethod === 'cash' ? "bg-emerald-500" : 
-                          sale.paymentMethod === 'card' ? "bg-blue-500" : "bg-orange-500"
-                        )} />
-                        <span className="text-[8px] text-zinc-500 uppercase font-bold">
-                          {sale.paymentMethod === 'cash' ? 'Nağd' : 
-                           sale.paymentMethod === 'card' ? 'Kart' : 'Nisyə'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {recentSales.length === 0 && (
-                  <p className="text-center text-zinc-600 text-[10px] py-4 italic">Hələ satış yoxdur</p>
-                )}
-              </div>
-            </div>
-          </div>
+          <ProductGrid products={filteredProducts} onAddToCart={addToCart} />
         </div>
       </div>
       {/* Client Selection Modal */}
@@ -593,6 +571,153 @@ export function Sales({ user }: { user: any }) {
           </div>
         </div>
       )}
+      {/* Drafts Modal */}
+      <AnimatePresence>
+        {isDraftsModalOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-900 w-full max-w-2xl rounded-3xl p-8 border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Save className="w-6 h-6 text-zinc-400" />
+                  Qaralamalar
+                </h3>
+                <button onClick={() => setIsDraftsModalOpen(false)} className="text-zinc-500 hover:text-white">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+                {drafts.map((draft) => (
+                  <div key={draft.id} className="bg-white/5 p-4 rounded-2xl flex justify-between items-center group">
+                    <div>
+                      <p className="text-white font-bold">{draft.items.length} məhsul</p>
+                      <p className="text-xs text-zinc-500">
+                        {draft.createdAt?.toDate().toLocaleString('az-AZ')}
+                      </p>
+                      {draft.selectedClient && (
+                        <p className="text-xs text-emerald-400 mt-1">Müştəri: {draft.selectedClient.name}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => loadDraft(draft)}
+                        className="px-4 py-2 bg-white text-zinc-900 rounded-xl text-xs font-bold hover:bg-zinc-100 transition-all"
+                      >
+                        Yüklə
+                      </button>
+                      <button
+                        onClick={() => deleteDraft(draft.id)}
+                        className="p-2 bg-red-500/10 text-red-500 rounded-xl hover:bg-red-500/20 transition-all"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {drafts.length === 0 && (
+                  <div className="text-center py-12">
+                    <Save className="w-12 h-12 text-zinc-700 mx-auto mb-4" />
+                    <p className="text-zinc-500">Heç bir qaralama tapılmadı.</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Receipt Modal */}
+      <AnimatePresence>
+        {isReceiptModalOpen && lastCompletedSale && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="receipt-modal bg-white w-full max-w-sm rounded-3xl p-8 shadow-2xl overflow-hidden flex flex-col"
+            >
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Receipt className="w-8 h-8 text-zinc-900" />
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900">Satış Qəbzi</h3>
+                <p className="text-xs text-zinc-500 mt-1">ID: #{lastCompletedSale.id.slice(-6).toUpperCase()}</p>
+              </div>
+
+              <div className="space-y-4 border-y border-zinc-100 py-6 my-6">
+                <div className="space-y-2">
+                  {lastCompletedSale.items.map((item: any, idx: number) => (
+                    <div key={idx} className="flex justify-between text-sm">
+                      <span className="text-zinc-600">{item.quantity}x {item.name}</span>
+                      <span className="font-bold text-zinc-900">₼{(item.price * item.quantity).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-4 space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-zinc-400">Cəmi:</span>
+                    <span className="text-zinc-600 font-medium">₼{lastCompletedSale.subtotal.toFixed(2)}</span>
+                  </div>
+                  {lastCompletedSale.discount > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-zinc-400">Endirim ({lastCompletedSale.discountType === 'percentage' ? `${lastCompletedSale.discount}%` : '₼'}):</span>
+                      <span className="text-red-500 font-medium">-₼{
+                        (lastCompletedSale.discountType === 'percentage' 
+                          ? lastCompletedSale.subtotal * (lastCompletedSale.discount / 100) 
+                          : lastCompletedSale.discount).toFixed(2)
+                      }</span>
+                    </div>
+                  )}
+                  {lastCompletedSale.tax > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-zinc-400">Vergi ({lastCompletedSale.tax}%):</span>
+                      <span className="text-zinc-600 font-medium">₼{( 
+                        (lastCompletedSale.subtotal - (lastCompletedSale.discountType === 'percentage' ? lastCompletedSale.subtotal * (lastCompletedSale.discount / 100) : lastCompletedSale.discount)) 
+                        * (lastCompletedSale.tax / 100) 
+                      ).toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-lg font-black pt-2 border-t border-zinc-50 mt-2">
+                    <span className="text-zinc-900 uppercase">Yekun:</span>
+                    <span className="text-zinc-900">₼{lastCompletedSale.totalAmount.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="flex-1 flex items-center justify-center gap-2 py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all"
+                  >
+                    <Printer className="w-5 h-5" />
+                    Çap Et
+                  </button>
+                  <button
+                    onClick={sendToWhatsApp}
+                    className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
+                  >
+                    <MessageCircle className="w-5 h-5" />
+                    WhatsApp
+                  </button>
+                </div>
+                <button
+                  onClick={() => setIsReceiptModalOpen(false)}
+                  className="w-full py-4 bg-zinc-100 text-zinc-600 rounded-2xl font-bold hover:bg-zinc-200 transition-all"
+                >
+                  Bağla
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

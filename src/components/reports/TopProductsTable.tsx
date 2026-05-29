@@ -10,7 +10,7 @@ export function TopProductsTable({ sales }: TopProductsTableProps) {
     <div className="bg-white p-6 sm:p-8 rounded-3xl border border-zinc-100 hover:shadow-sm transition-all">
       <h3 className="text-lg font-bold mb-6">Ən Çox Satılan Məhsullar</h3>
       <div className="overflow-x-auto">
-        <table className="w-full text-left">
+        <table className="w-full text-left whitespace-nowrap min-w-[600px]">
           <thead>
             <tr className="border-b border-zinc-100">
               <th className="pb-4 text-xs font-bold text-zinc-400 uppercase tracking-wider">Məhsul</th>
